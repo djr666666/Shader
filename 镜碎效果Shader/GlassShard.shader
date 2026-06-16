@@ -48,6 +48,16 @@ Shader "Custom/GlassShard"
         _LightAngle ("Light Angle", Range(0, 6.2832)) = 2.3
         _ShadowStrength ("Drop Shadow", Range(0.0, 0.6)) = 0.25
 
+        [Header(Scan Sweep)]
+        [Toggle] _ScanOn ("Scan Sweep (扫光开关)", Float) = 1
+        [HDR] _ScanColor ("Scan Color (HDR)", Color) = (1, 1, 1, 1)
+        _ScanAngle ("Scan Angle (扫光角度)", Range(0, 6.2832)) = 5.67
+        _ScanWidth ("Scan Width (线宽)", Range(0.001, 0.5)) = 0.04
+        _ScanSpeed ("Scan Speed (周期速度)", Range(0.0, 3.0)) = 1.5
+        _ScanInterval ("Scan Interval (间隔停顿)", Range(0.0, 5.0)) = 5.0
+        _ScanIntensity ("Scan Intensity", Range(0.0, 5.0)) = 0.53
+        _ScanSpecBoost ("Scan Spec Boost (近高光增强)", Range(0.0, 8.0)) = 8.0
+
         [Header(Cracks)]
         _CrackStrength ("Crack Strength (裂纹强度)", Range(0.0, 2.0)) = 0.0
         _CrackScale ("Crack Density (蛛网密度)", Range(2.0, 30.0)) = 2
@@ -105,6 +115,15 @@ Shader "Custom/GlassShard"
             float _CrackWidth;
             float4 _CrackCenter;
             float _RadialCount;
+
+            float _ScanOn;
+            float4 _ScanColor;
+            float _ScanAngle;
+            float _ScanWidth;
+            float _ScanSpeed;
+            float _ScanInterval;
+            float _ScanIntensity;
+            float _ScanSpecBoost;
 
             struct appdata { float4 vertex : POSITION; float2 uv : TEXCOORD0; };
             struct v2f { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; };
@@ -352,6 +371,32 @@ Shader "Custom/GlassShard"
                     // 亮边/反光：裂纹尖锐处捕捉光，强度随光方向略变
                     float glint = pow(crk, 2.0) * (0.5 + 0.5 * saturate(spec + fres));
                     glass += glint * _CrackStrength;
+                }
+
+                // —— 扫光：周期性从指定角度扫过一道 HDR 发光线条 ——
+                if (_ScanOn > 0.5)
+                {
+                    // 相对碎片中心的等高坐标，沿扫光角度方向投影
+                    float2 q = F - float2(_Center.x * aspect, _Center.y);
+                    float2 dir = float2(cos(_ScanAngle), sin(_ScanAngle));
+                    float proj = dot(q, dir);            // 沿扫光轴的坐标
+
+                    // 周期：扫过的时间 + 停顿间隔。frac 出 0~1 相位，前半段扫过、后段停。
+                    float period = 1.0 / max(_ScanSpeed, 1e-3) + _ScanInterval;
+                    float phase = frac(_Time.y / max(period, 1e-3));
+                    float sweepT = saturate(phase * period * _ScanSpeed);   // 0..1 扫过进度
+                    float ext = _Size + _ScanWidth;
+                    float sweepPos = lerp(-ext, ext, sweepT);
+
+                    // 细线 + 柔光晕
+                    float dist = abs(proj - sweepPos);
+                    float scanLine = smoothstep(_ScanWidth, 0.0, dist);
+                    float glow = smoothstep(_ScanWidth * 4.0, 0.0, dist) * 0.4;
+                    // 扫描进行中(未处于停顿)才显示
+                    float active = step(sweepT, 0.999) * step(0.001, sweepT);
+                    // 越靠近高光(spec 越强)发光越亮
+                    float specBoost = 1.0 + _ScanSpecBoost * saturate(spec);
+                    glass += _ScanColor.rgb * _ScanIntensity * specBoost * (scanLine + glow) * active;
                 }
 
                 // —— 统一合成（预乘）：玻璃只在 shape 内可见，阴影只压暗、不重绘纹理 ——
